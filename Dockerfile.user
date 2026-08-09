@@ -1,0 +1,34 @@
+FROM python:3.11-slim
+
+# تثبيت الأدوات الأساسية (curl, gnupg)
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# تثبيت Node.js 18 LTS
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g npm@latest
+
+# تثبيت PHP 8.2 مع الملحقات المطلوبة
+RUN apt-get update && apt-get install -y \
+    php8.2 \
+    php8.2-cli \
+    php8.2-mbstring \
+    php8.2-xml \
+    php8.2-curl \
+    php8.2-zip \
+    php8.2-bcmath \
+    php8.2-json \
+    && php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');" \
+    && php composer-setup.php --install-dir=/usr/local/bin --filename=composer \
+    && php -r "unlink('composer-setup.php');" \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# تحقق من وجود الأوامر
+RUN node --version && php --version && composer --version
+
+CMD ["tail", "-f", "/dev/null"]
