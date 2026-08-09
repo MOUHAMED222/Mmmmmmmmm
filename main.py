@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ===================== الإعدادات العامة =====================
 USER_DATA_DIR = os.path.abspath("user_data")
-BOT_TOKEN = "8663385334:AAEdOg7dr8CoGQzkTG-yKIldORRM2kWgois"
+BOT_TOKEN = "8663385334:AAHrotDmXfRKwI-hJsQu-Q8sN_oA3cK1Krk"
 ADMIN_ID = 8523524013
 BOT_USERNAME = "@HOST_1_1_1bot"
 CONTACT_USERNAME = "@mouhamed_ma"
@@ -1295,11 +1295,14 @@ class ContainerManager:
         return True
 
     def ensure_container(self, user_id: str) -> Optional[str]:
+        """تأكد من وجود حاوية جاهزة للتشغيل، مع معالجة التعارضات."""
         if not self.is_available():
             logger.warning("Docker غير متوفر، لا يمكن إنشاء حاوية.")
             return None
 
         container_name = self.get_user_container_name(user_id)
+
+        # محاولة الحصول على الحاوية الحالية
         try:
             container = self.docker_client.containers.get(container_name)
             if container.status == "running":
@@ -1308,12 +1311,24 @@ class ContainerManager:
                 container.start()
                 return container_name
             else:
+                # حالة غير معروفة: نحذفها ونعيد الإنشاء
                 container.remove(force=True)
                 return self._create_container(user_id)
         except NotFound:
+            # الحاوية غير موجودة، ننشئها
             return self._create_container(user_id)
         except Exception as e:
             logger.error(f"خطأ في التأكد من حاوية المستخدم {user_id}: {e}")
+            # إذا كان الخطأ بسبب تعارض، نحاول إزالة الحاوية القديمة وإعادة المحاولة
+            if "Conflict" in str(e) or "already in use" in str(e):
+                try:
+                    old_container = self.docker_client.containers.get(container_name)
+                    old_container.remove(force=True)
+                    logger.info(f"تم إزالة الحاوية المتعارضة {container_name}")
+                    return self._create_container(user_id)
+                except Exception as e2:
+                    logger.error(f"فشل إزالة الحاوية المتعارضة: {e2}")
+                    return None
             return None
 
     def _create_container(self, user_id: str) -> Optional[str]:
@@ -1325,13 +1340,14 @@ class ContainerManager:
         self.ensure_user_dir(user_id)
 
         try:
+            # التأكد من وجود الصورة
             try:
                 self.docker_client.images.get(CONTAINER_IMAGE)
             except docker.errors.ImageNotFound:
                 logger.info(f"سحب الصورة {CONTAINER_IMAGE} ...")
                 self.docker_client.images.pull(CONTAINER_IMAGE)
 
-            # التعديل الجوهري: جعل الحاوية قابلة للكتابة لتثبيت الاعتماديات
+            # إنشاء الحاوية (قابلة للكتابة)
             container = self.docker_client.containers.create(
                 image=CONTAINER_IMAGE,
                 name=container_name,
@@ -1343,7 +1359,7 @@ class ContainerManager:
                         "mode": "rw"
                     }
                 },
-                read_only=False,  # تم التغيير هنا لإتاحة التثبيت
+                read_only=False,  # يجب أن تكون قابلة للكتابة لتثبيت الحزم
                 tmpfs={
                     "/tmp": "rw,noexec,nosuid,size=64M"
                 },
@@ -1359,8 +1375,13 @@ class ContainerManager:
             container.start()
             logger.info(f"✅ تم إنشاء حاوية للمستخدم {user_id}: {container_name}")
 
-            # تثبيت الاعتماديات الأساسية في الحاوية (Node.js, npm, PHP, Composer)
-            self._install_runtime_dependencies(user_id)
+            # تثبيت الاعتماديات الأساسية (Node.js, PHP, Composer)
+            if not self._install_runtime_dependencies(user_id):
+                logger.error(f"فشل تثبيت الاعتماديات في حاوية المستخدم {user_id}")
+                # نوقف الحاوية ونحذفها لأنها غير صالحة للاستخدام
+                container.stop()
+                container.remove()
+                return None
 
             return container_name
         except Exception as e:
@@ -1370,20 +1391,30 @@ class ContainerManager:
     def _install_runtime_dependencies(self, user_id: str) -> bool:
         """
         تثبيت Node.js و PHP و Composer في الحاوية.
-        يتم التحقق مما إذا كانت مثبتة بالفعل لتجنب التثبيت المتكرر.
+        يتم التحقق من نجاح التثبيت بعد كل خطوة.
         """
         if not self.is_available():
             return False
 
-        # التحقق مما إذا كانت Node.js مثبتة
-        check_node = self.run_command_in_container(user_id, "which node || echo not_found", detach=False)
+        # تحديث قائمة الحزم وتثبيت الأدوات الأساسية
+        base_packages = [
+            "apt-get update -qq",
+            "apt-get install -y -qq curl gnupg ca-certificates"
+        ]
+        for cmd in base_packages:
+            result = self.run_command_in_container(user_id, cmd, detach=False)
+            if result is None:
+                logger.error(f"فشل تنفيذ الأمر الأساسي: {cmd}")
+                return False
+            time.sleep(1)
+
+        # تثبيت Node.js (إذا لم يكن موجوداً)
+        check_node = self.run_command_in_container(user_id, "command -v node || echo not_found", detach=False)
         if check_node and "not_found" not in check_node:
             logger.info(f"✅ Node.js مثبت بالفعل للمستخدم {user_id}")
         else:
             logger.info(f"📦 تثبيت Node.js و npm للمستخدم {user_id}...")
             install_cmds = [
-                "apt-get update -qq",
-                "apt-get install -y -qq curl gnupg",
                 "curl -fsSL https://deb.nodesource.com/setup_18.x | bash -",
                 "apt-get install -y -qq nodejs",
                 "npm install -g npm@latest"
@@ -1395,14 +1426,20 @@ class ContainerManager:
                     return False
                 time.sleep(1)
 
-        # التحقق مما إذا كانت PHP مثبتة
-        check_php = self.run_command_in_container(user_id, "which php || echo not_found", detach=False)
+            # تحقق من التثبيت
+            check_node2 = self.run_command_in_container(user_id, "node --version", detach=False)
+            if check_node2 is None or "not found" in check_node2.lower():
+                logger.error("فشل تثبيت Node.js")
+                return False
+            logger.info(f"✅ تم تثبيت Node.js بنجاح: {check_node2[:20]}")
+
+        # تثبيت PHP (إذا لم يكن موجوداً)
+        check_php = self.run_command_in_container(user_id, "command -v php || echo not_found", detach=False)
         if check_php and "not_found" not in check_php:
             logger.info(f"✅ PHP مثبت بالفعل للمستخدم {user_id}")
         else:
             logger.info(f"📦 تثبيت PHP و Composer للمستخدم {user_id}...")
             install_cmds = [
-                "apt-get update -qq",
                 "apt-get install -y -qq php php-cli php-mbstring php-xml php-curl php-zip php-bcmath php-json",
                 "php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\"",
                 "php composer-setup.php --install-dir=/usr/local/bin --filename=composer",
@@ -1415,10 +1452,20 @@ class ContainerManager:
                     return False
                 time.sleep(1)
 
-        # التحقق من التثبيت
-        check_node2 = self.run_command_in_container(user_id, "node --version || echo fail", detach=False)
-        check_php2 = self.run_command_in_container(user_id, "php --version || echo fail", detach=False)
-        logger.info(f"✅ اكتمل تثبيت الاعتماديات للمستخدم {user_id} (Node: {check_node2[:20] if check_node2 else '?'}, PHP: {check_php2[:20] if check_php2 else '?'})")
+            # تحقق من التثبيت
+            check_php2 = self.run_command_in_container(user_id, "php --version", detach=False)
+            if check_php2 is None or "not found" in check_php2.lower():
+                logger.error("فشل تثبيت PHP")
+                return False
+            logger.info(f"✅ تم تثبيت PHP بنجاح: {check_php2[:20]}")
+
+            check_composer = self.run_command_in_container(user_id, "composer --version", detach=False)
+            if check_composer is None or "not found" in check_composer.lower():
+                logger.error("فشل تثبيت Composer")
+                return False
+            logger.info(f"✅ تم تثبيت Composer بنجاح: {check_composer[:20]}")
+
+        logger.info(f"✅ اكتمل تثبيت الاعتماديات للمستخدم {user_id}")
         return True
 
     def copy_file_to_container(self, user_id: str, local_path: str, container_path: str) -> bool:
