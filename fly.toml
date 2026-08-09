@@ -14,7 +14,7 @@ primary_region = 'lax'
   destination = '/app/user_data'
 
 [http_service]
-  internal_port = 8085
+  internal_port = 8100
   force_https = true
   auto_stop_machines = 'off'
   auto_start_machines = true
@@ -22,6 +22,6 @@ primary_region = 'lax'
 
 [[vm]]
   cpu_kind = 'performance'
-  cpus = 16
-  memory_mb = 131072
+  cpus = 1
+  memory_mb = 1024
   privileged = true   # ضروري لتشغيل Docker daemon داخل الحاوية
