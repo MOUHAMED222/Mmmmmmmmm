@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ===================== الإعدادات العامة =====================
 USER_DATA_DIR = os.path.abspath("user_data")
-BOT_TOKEN = "8663385334:AAHBmH583oq2nhBmguetXtKSzX66tI3_OrM"
+BOT_TOKEN = "8663385334:AAEpY08CwjidnJpgLP3Imqzg3nnMqmuWE2U"
 ADMIN_ID = 8523524013
 BOT_USERNAME = "@HOST_1_1_1bot"
 CONTACT_USERNAME = "@mouhamed_ma"
@@ -1388,27 +1388,73 @@ class ContainerManager:
             logger.error(f"فشل إنشاء حاوية للمستخدم {user_id}: {e}")
             return None
 
+    # ===================== الدالة المعدلة (التغيير الجوهري هنا) =====================
+    def run_command_in_container(self, user_id: str, command: str, detach: bool = True,
+                                 workdir: str = "/app", environment: Optional[Dict[str, str]] = None) -> Optional[str]:
+        """
+        تنفيذ أمر في الحاوية مع إمكانية تحديد متغيرات البيئة.
+        **التعديل: التحقق من exit_code وإرجاع None عند الفشل.**
+        """
+        if not self.is_available():
+            return None
+        container_name = self.get_user_container_name(user_id)
+        try:
+            container = self.docker_client.containers.get(container_name)
+            env_list = None
+            if environment:
+                env_list = [f"{k}={v}" for k, v in environment.items()]
+
+            if detach:
+                exec_id = self.docker_client.api.exec_create(
+                    container=container.id,
+                    cmd=command,
+                    workdir=workdir,
+                    environment=env_list,
+                )['Id']
+                self.docker_client.api.exec_start(exec_id, detach=True)
+                return exec_id
+            else:
+                result = container.exec_run(
+                    cmd=command,
+                    workdir=workdir,
+                    detach=False,
+                    stream=False,
+                    environment=env_list,
+                )
+                # التحقق من نجاح الأمر
+                if result.exit_code != 0:
+                    error_msg = result.output.decode('utf-8', errors='replace').strip()
+                    logger.error(f"الأمر '{command}' فشل مع كود الخروج {result.exit_code}: {error_msg}")
+                    return None
+                output = result.output.decode('utf-8', errors='replace').strip()
+                return output
+        except Exception as e:
+            logger.error(f"خطأ في run_command_in_container: {e}")
+            return None
+
+    # ===================== الدالة المعدلة (التغيير الجوهري هنا) =====================
     def _install_runtime_dependencies(self, user_id: str) -> bool:
         """
         تثبيت Node.js و PHP و Composer في الحاوية بشكل إجباري،
         مع التحقق من نجاح التثبيت بعد كل خطوة.
+        **التعديل: تأكد من تثبيت curl أولاً، والتحقق من كل أمر.**
         """
         if not self.is_available():
             return False
 
-        # تحديث قائمة الحزم وتثبيت الأدوات الأساسية
+        # 1. تحديث قائمة الحزم وتثبيت الأساسيات (بما فيها curl)
         base_cmds = [
             "apt-get update -qq",
             "apt-get install -y -qq curl gnupg ca-certificates"
         ]
         for cmd in base_cmds:
-            result = self.run_command_in_container(user_id, cmd, detach=False)
-            if result is None:
+            output = self.run_command_in_container(user_id, cmd, detach=False)
+            if output is None:
                 logger.error(f"فشل تنفيذ الأمر الأساسي: {cmd}")
                 return False
             time.sleep(1)
 
-        # تثبيت Node.js (إجباري)
+        # 2. تثبيت Node.js عبر NodeSource
         logger.info(f"📦 تثبيت Node.js و npm للمستخدم {user_id}...")
         install_node_cmds = [
             "curl -fsSL https://deb.nodesource.com/setup_18.x | bash -",
@@ -1416,20 +1462,20 @@ class ContainerManager:
             "npm install -g npm@latest"
         ]
         for cmd in install_node_cmds:
-            result = self.run_command_in_container(user_id, cmd, detach=False)
-            if result is None:
+            output = self.run_command_in_container(user_id, cmd, detach=False)
+            if output is None:
                 logger.error(f"فشل تنفيذ الأمر: {cmd}")
                 return False
             time.sleep(1)
 
-        # تحقق من تثبيت Node.js
+        # 3. التحقق من Node.js
         check_node = self.run_command_in_container(user_id, "node --version", detach=False)
         if check_node is None or "not found" in check_node.lower():
             logger.error("فشل تثبيت Node.js")
             return False
         logger.info(f"✅ تم تثبيت Node.js: {check_node[:20]}")
 
-        # تثبيت PHP (إجباري)
+        # 4. تثبيت PHP و Composer
         logger.info(f"📦 تثبيت PHP و Composer للمستخدم {user_id}...")
         install_php_cmds = [
             "apt-get install -y -qq php php-cli php-mbstring php-xml php-curl php-zip php-bcmath php-json",
@@ -1438,20 +1484,19 @@ class ContainerManager:
             "php -r \"unlink('composer-setup.php');\"",
         ]
         for cmd in install_php_cmds:
-            result = self.run_command_in_container(user_id, cmd, detach=False)
-            if result is None:
+            output = self.run_command_in_container(user_id, cmd, detach=False)
+            if output is None:
                 logger.error(f"فشل تنفيذ الأمر: {cmd}")
                 return False
             time.sleep(1)
 
-        # تحقق من تثبيت PHP
+        # 5. التحقق من PHP و Composer
         check_php = self.run_command_in_container(user_id, "php --version", detach=False)
         if check_php is None or "not found" in check_php.lower():
             logger.error("فشل تثبيت PHP")
             return False
         logger.info(f"✅ تم تثبيت PHP: {check_php[:20]}")
 
-        # تحقق من Composer
         check_composer = self.run_command_in_container(user_id, "composer --version", detach=False)
         if check_composer is None or "not found" in check_composer.lower():
             logger.error("فشل تثبيت Composer")
@@ -1509,43 +1554,6 @@ class ContainerManager:
         except Exception as e:
             logger.error(f"خطأ في copy_file_from_container: {e}")
             return False
-
-    def run_command_in_container(self, user_id: str, command: str, detach: bool = True,
-                                 workdir: str = "/app", environment: Optional[Dict[str, str]] = None) -> Optional[str]:
-        """
-        تنفيذ أمر في الحاوية مع إمكانية تحديد متغيرات البيئة.
-        """
-        if not self.is_available():
-            return None
-        container_name = self.get_user_container_name(user_id)
-        try:
-            container = self.docker_client.containers.get(container_name)
-            env_list = None
-            if environment:
-                env_list = [f"{k}={v}" for k, v in environment.items()]
-
-            if detach:
-                exec_id = self.docker_client.api.exec_create(
-                    container=container.id,
-                    cmd=command,
-                    workdir=workdir,
-                    environment=env_list,
-                )['Id']
-                self.docker_client.api.exec_start(exec_id, detach=True)
-                return exec_id
-            else:
-                result = container.exec_run(
-                    cmd=command,
-                    workdir=workdir,
-                    detach=False,
-                    stream=False,
-                    environment=env_list,
-                )
-                output = result.output.decode('utf-8').strip()
-                return output
-        except Exception as e:
-            logger.error(f"خطأ في run_command_in_container: {e}")
-            return None
 
     def install_imported_requirements(self, user_id: str, file_path: str) -> bool:
         if not self.is_available():
