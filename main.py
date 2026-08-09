@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ===================== الإعدادات العامة =====================
 USER_DATA_DIR = os.path.abspath("user_data")
-BOT_TOKEN = "8663385334:AAEYioH6NxjOIw7O66Y4EuD_1CcK049XVpI"
+BOT_TOKEN = "8663385334:AAEGMDNhVyJfxKgc_Ck0COWc1gLz2Wozwe8"
 ADMIN_ID = 8523524013
 BOT_USERNAME = "@HOST_1_1_1bot"
 CONTACT_USERNAME = "@mouhamed_ma"
@@ -1331,6 +1331,7 @@ class ContainerManager:
                 logger.info(f"سحب الصورة {CONTAINER_IMAGE} ...")
                 self.docker_client.images.pull(CONTAINER_IMAGE)
 
+            # التعديل الجوهري: جعل الحاوية قابلة للكتابة لتثبيت الاعتماديات
             container = self.docker_client.containers.create(
                 image=CONTAINER_IMAGE,
                 name=container_name,
@@ -1342,7 +1343,7 @@ class ContainerManager:
                         "mode": "rw"
                     }
                 },
-                read_only=True,
+                read_only=False,  # تم التغيير هنا لإتاحة التثبيت
                 tmpfs={
                     "/tmp": "rw,noexec,nosuid,size=64M"
                 },
@@ -1380,7 +1381,6 @@ class ContainerManager:
             logger.info(f"✅ Node.js مثبت بالفعل للمستخدم {user_id}")
         else:
             logger.info(f"📦 تثبيت Node.js و npm للمستخدم {user_id}...")
-            # تثبيت Node.js من خلال apt
             install_cmds = [
                 "apt-get update -qq",
                 "apt-get install -y -qq curl gnupg",
@@ -1452,7 +1452,6 @@ class ContainerManager:
         container_name = self.get_user_container_name(user_id)
         try:
             container = self.docker_client.containers.get(container_name)
-            # قراءة الملف من الحاوية
             result = container.exec_run(
                 cmd=["cat", container_path],
                 detach=False,
