@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ===================== الإعدادات العامة =====================
 USER_DATA_DIR = os.path.abspath("user_data")
-BOT_TOKEN = "8663385334:AAHrotDmXfRKwI-hJsQu-Q8sN_oA3cK1Krk"
+BOT_TOKEN = "8663385334:AAHBmH583oq2nhBmguetXtKSzX66tI3_OrM"
 ADMIN_ID = 8523524013
 BOT_USERNAME = "@HOST_1_1_1bot"
 CONTACT_USERNAME = "@mouhamed_ma"
@@ -1390,80 +1390,73 @@ class ContainerManager:
 
     def _install_runtime_dependencies(self, user_id: str) -> bool:
         """
-        تثبيت Node.js و PHP و Composer في الحاوية.
-        يتم التحقق من نجاح التثبيت بعد كل خطوة.
+        تثبيت Node.js و PHP و Composer في الحاوية بشكل إجباري،
+        مع التحقق من نجاح التثبيت بعد كل خطوة.
         """
         if not self.is_available():
             return False
 
         # تحديث قائمة الحزم وتثبيت الأدوات الأساسية
-        base_packages = [
+        base_cmds = [
             "apt-get update -qq",
             "apt-get install -y -qq curl gnupg ca-certificates"
         ]
-        for cmd in base_packages:
+        for cmd in base_cmds:
             result = self.run_command_in_container(user_id, cmd, detach=False)
             if result is None:
                 logger.error(f"فشل تنفيذ الأمر الأساسي: {cmd}")
                 return False
             time.sleep(1)
 
-        # تثبيت Node.js (إذا لم يكن موجوداً)
-        check_node = self.run_command_in_container(user_id, "command -v node || echo not_found", detach=False)
-        if check_node and "not_found" not in check_node:
-            logger.info(f"✅ Node.js مثبت بالفعل للمستخدم {user_id}")
-        else:
-            logger.info(f"📦 تثبيت Node.js و npm للمستخدم {user_id}...")
-            install_cmds = [
-                "curl -fsSL https://deb.nodesource.com/setup_18.x | bash -",
-                "apt-get install -y -qq nodejs",
-                "npm install -g npm@latest"
-            ]
-            for cmd in install_cmds:
-                result = self.run_command_in_container(user_id, cmd, detach=False)
-                if result is None:
-                    logger.error(f"فشل تنفيذ الأمر: {cmd}")
-                    return False
-                time.sleep(1)
-
-            # تحقق من التثبيت
-            check_node2 = self.run_command_in_container(user_id, "node --version", detach=False)
-            if check_node2 is None or "not found" in check_node2.lower():
-                logger.error("فشل تثبيت Node.js")
+        # تثبيت Node.js (إجباري)
+        logger.info(f"📦 تثبيت Node.js و npm للمستخدم {user_id}...")
+        install_node_cmds = [
+            "curl -fsSL https://deb.nodesource.com/setup_18.x | bash -",
+            "apt-get install -y -qq nodejs",
+            "npm install -g npm@latest"
+        ]
+        for cmd in install_node_cmds:
+            result = self.run_command_in_container(user_id, cmd, detach=False)
+            if result is None:
+                logger.error(f"فشل تنفيذ الأمر: {cmd}")
                 return False
-            logger.info(f"✅ تم تثبيت Node.js بنجاح: {check_node2[:20]}")
+            time.sleep(1)
 
-        # تثبيت PHP (إذا لم يكن موجوداً)
-        check_php = self.run_command_in_container(user_id, "command -v php || echo not_found", detach=False)
-        if check_php and "not_found" not in check_php:
-            logger.info(f"✅ PHP مثبت بالفعل للمستخدم {user_id}")
-        else:
-            logger.info(f"📦 تثبيت PHP و Composer للمستخدم {user_id}...")
-            install_cmds = [
-                "apt-get install -y -qq php php-cli php-mbstring php-xml php-curl php-zip php-bcmath php-json",
-                "php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\"",
-                "php composer-setup.php --install-dir=/usr/local/bin --filename=composer",
-                "php -r \"unlink('composer-setup.php');\"",
-            ]
-            for cmd in install_cmds:
-                result = self.run_command_in_container(user_id, cmd, detach=False)
-                if result is None:
-                    logger.error(f"فشل تنفيذ الأمر: {cmd}")
-                    return False
-                time.sleep(1)
+        # تحقق من تثبيت Node.js
+        check_node = self.run_command_in_container(user_id, "node --version", detach=False)
+        if check_node is None or "not found" in check_node.lower():
+            logger.error("فشل تثبيت Node.js")
+            return False
+        logger.info(f"✅ تم تثبيت Node.js: {check_node[:20]}")
 
-            # تحقق من التثبيت
-            check_php2 = self.run_command_in_container(user_id, "php --version", detach=False)
-            if check_php2 is None or "not found" in check_php2.lower():
-                logger.error("فشل تثبيت PHP")
+        # تثبيت PHP (إجباري)
+        logger.info(f"📦 تثبيت PHP و Composer للمستخدم {user_id}...")
+        install_php_cmds = [
+            "apt-get install -y -qq php php-cli php-mbstring php-xml php-curl php-zip php-bcmath php-json",
+            "php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\"",
+            "php composer-setup.php --install-dir=/usr/local/bin --filename=composer",
+            "php -r \"unlink('composer-setup.php');\"",
+        ]
+        for cmd in install_php_cmds:
+            result = self.run_command_in_container(user_id, cmd, detach=False)
+            if result is None:
+                logger.error(f"فشل تنفيذ الأمر: {cmd}")
                 return False
-            logger.info(f"✅ تم تثبيت PHP بنجاح: {check_php2[:20]}")
+            time.sleep(1)
 
-            check_composer = self.run_command_in_container(user_id, "composer --version", detach=False)
-            if check_composer is None or "not found" in check_composer.lower():
-                logger.error("فشل تثبيت Composer")
-                return False
-            logger.info(f"✅ تم تثبيت Composer بنجاح: {check_composer[:20]}")
+        # تحقق من تثبيت PHP
+        check_php = self.run_command_in_container(user_id, "php --version", detach=False)
+        if check_php is None or "not found" in check_php.lower():
+            logger.error("فشل تثبيت PHP")
+            return False
+        logger.info(f"✅ تم تثبيت PHP: {check_php[:20]}")
+
+        # تحقق من Composer
+        check_composer = self.run_command_in_container(user_id, "composer --version", detach=False)
+        if check_composer is None or "not found" in check_composer.lower():
+            logger.error("فشل تثبيت Composer")
+            return False
+        logger.info(f"✅ تم تثبيت Composer: {check_composer[:20]}")
 
         logger.info(f"✅ اكتمل تثبيت الاعتماديات للمستخدم {user_id}")
         return True
