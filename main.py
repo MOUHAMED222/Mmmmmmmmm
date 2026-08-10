@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ===================== الإعدادات العامة =====================
 USER_DATA_DIR = os.path.abspath("user_data")
-BOT_TOKEN = "8663385334:AAEGMDNhVyJfxKgc_Ck0COWc1gLz2Wozwe8"
+BOT_TOKEN = "8663385334:AAF4Fau7_d5l0ZqZLs_nGqfBxMdJ2NcMNOc"
 ADMIN_ID = 8523524013
 BOT_USERNAME = "@HOST_1_1_1bot"
 CONTACT_USERNAME = "@mouhamed_ma"
