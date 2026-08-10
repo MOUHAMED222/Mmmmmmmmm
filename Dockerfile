@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && php -r "unlink('composer-setup.php');" \
     && rm -rf /var/lib/apt/lists/*
 
-# تعيين متغيرات البيئة لتثبيت حزم Python محليًا
+# تعيين مسار تثبيت حزم Python محليًا
 ENV PYTHONUSERBASE=/app/.local \
     PATH=/app/.local/bin:$PATH
 
@@ -48,7 +48,8 @@ FROM python:3.12-slim
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /usr /usr
 COPY --from=builder /app /app
-COPY --from=builder /root/.local /root/.local
+# نسخ حزم Python المثبتة محليًا (تم وضعها في /app/.local)
+COPY --from=builder /app/.local /app/.local
 
 ENV PYTHONUSERBASE=/app/.local \
     PATH=/app/.local/bin:/usr/local/bin:/usr/bin:/bin
