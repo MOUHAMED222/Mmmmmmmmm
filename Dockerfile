@@ -10,10 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# تثبيت Node.js 18.x
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+# تثبيت Node.js 20.x LTS (بدلاً من 18)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g npm@latest \
     && rm -rf /var/lib/apt/lists/*
 
 # تثبيت PHP 8.2 و Composer
@@ -44,7 +43,7 @@ RUN pip install --upgrade pip setuptools wheel \
 # نسخ باقي المشروع
 COPY . .
 
-# صورة نهائية أصغر (اختياري) - يمكن تخطيها واستخدام الصورة أعلاه مباشرة
+# صورة نهائية
 FROM python:3.12-slim
 
 # نسخ التثبيتات من المرحلة السابقة
