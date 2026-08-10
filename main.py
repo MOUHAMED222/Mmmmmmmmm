@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 
 # ===================== الإعدادات العامة =====================
 USER_DATA_DIR = os.path.abspath("user_data")
-BOT_TOKEN = "8663385334:AAF4Fau7_d5l0ZqZLs_nGqfBxMdJ2NcMNOc"
+BOT_TOKEN = "8608070406:AAHWrOICDzOExR6BZ1N96-2exbughWVBRwM"
 ADMIN_ID = 8523524013
-BOT_USERNAME = "@HOST_1_1_1bot"
+BOT_USERNAME = "@Hostng_bot"
 CONTACT_USERNAME = "@mouhamed_ma"
 BACKUP_CHANNEL = "@ToolsforHumanitydoubleyourwe"
 VIP_CHANNEL_ID = "@ToolsforHumanitydoubleyourwe"
@@ -1242,7 +1242,6 @@ except ImportError:
     DOCKER_AVAILABLE = False
     logger.warning("مكتبة docker غير مثبتة، لن يعمل نظام الحاويات. يرجى تثبيتها: pip install docker")
 
-# ===================== التعديل الأساسي: استخدام الصورة المخصصة =====================
 CONTAINER_IMAGE = "host-bot-base:latest"
 MAX_STORAGE_MB = 500
 os.makedirs(USER_DATA_DIR, exist_ok=True)
@@ -1252,6 +1251,7 @@ class ContainerManager:
 
     def __init__(self):
         self.docker_client = None
+        self.direct_mode = False  # وضع مباشر بدون Docker (لبيئات مثل Fly.io)
         if DOCKER_AVAILABLE:
             try:
                 self.docker_client = docker.from_env()
@@ -1260,11 +1260,14 @@ class ContainerManager:
             except Exception as e:
                 logger.error(f"❌ فشل الاتصال بـ Docker: {e}")
                 self.docker_client = None
+                self.direct_mode = True
+                logger.info("⚠️ سيتم استخدام الوضع المباشر (بدون عزل) بسبب عدم توفر Docker.")
         else:
-            logger.warning("⚠️ Docker غير متوفر، سيتم استخدام الوضع القديم (غير معزول).")
+            self.direct_mode = True
+            logger.info("⚠️ سيتم استخدام الوضع المباشر (بدون عزل) لعدم وجود مكتبة docker.")
 
     def is_available(self) -> bool:
-        return self.docker_client is not None
+        return self.docker_client is not None or self.direct_mode
 
     def get_user_dir(self, user_id: str) -> str:
         return os.path.abspath(os.path.join(USER_DATA_DIR, str(user_id)))
@@ -1296,14 +1299,17 @@ class ContainerManager:
         return True
 
     def ensure_container(self, user_id: str) -> Optional[str]:
-        """تأكد من وجود حاوية جاهزة للتشغيل، مع معالجة التعارضات."""
+        """تأكد من وجود حاوية جاهزة للتشغيل، أو قم بتهيئة الوضع المباشر."""
+        if self.direct_mode:
+            # في الوضع المباشر، نستخدم مجلد المستخدم فقط
+            self.ensure_user_dir(user_id)
+            return "direct"
         if not self.is_available():
             logger.warning("Docker غير متوفر، لا يمكن إنشاء حاوية.")
             return None
 
         container_name = self.get_user_container_name(user_id)
 
-        # محاولة الحصول على الحاوية الحالية
         try:
             container = self.docker_client.containers.get(container_name)
             if container.status == "running":
@@ -1312,15 +1318,12 @@ class ContainerManager:
                 container.start()
                 return container_name
             else:
-                # حالة غير معروفة: نحذفها ونعيد الإنشاء
                 container.remove(force=True)
                 return self._create_container(user_id)
         except NotFound:
-            # الحاوية غير موجودة، ننشئها
             return self._create_container(user_id)
         except Exception as e:
             logger.error(f"خطأ في التأكد من حاوية المستخدم {user_id}: {e}")
-            # إذا كان الخطأ بسبب تعارض، نحاول إزالة الحاوية القديمة وإعادة المحاولة
             if "Conflict" in str(e) or "already in use" in str(e):
                 try:
                     old_container = self.docker_client.containers.get(container_name)
@@ -1333,22 +1336,19 @@ class ContainerManager:
             return None
 
     def _create_container(self, user_id: str) -> Optional[str]:
-        if not self.is_available():
+        if self.direct_mode or not self.is_available():
             return None
-
         container_name = self.get_user_container_name(user_id)
         user_dir = self.get_user_dir(user_id)
         self.ensure_user_dir(user_id)
 
         try:
-            # التأكد من وجود الصورة
             try:
                 self.docker_client.images.get(CONTAINER_IMAGE)
             except docker.errors.ImageNotFound:
                 logger.info(f"سحب الصورة {CONTAINER_IMAGE} ...")
                 self.docker_client.images.pull(CONTAINER_IMAGE)
 
-            # إنشاء الحاوية (قابلة للكتابة)
             container = self.docker_client.containers.create(
                 image=CONTAINER_IMAGE,
                 name=container_name,
@@ -1360,7 +1360,7 @@ class ContainerManager:
                         "mode": "rw"
                     }
                 },
-                read_only=False,  # يجب أن تكون قابلة للكتابة لتثبيت الحزم
+                read_only=False,
                 tmpfs={
                     "/tmp": "rw,noexec,nosuid,size=64M"
                 },
@@ -1375,31 +1375,37 @@ class ContainerManager:
             )
             container.start()
             logger.info(f"✅ تم إنشاء حاوية للمستخدم {user_id}: {container_name}")
-
-            # ===================== التعديل: تعطيل تثبيت الاعتماديات لأن الصورة جاهزة =====================
-            # if not self._install_runtime_dependencies(user_id):
-            #     logger.error(f"فشل تثبيت الاعتماديات في حاوية المستخدم {user_id}")
-            #     container.stop()
-            #     container.remove()
-            #     return None
-
             return container_name
         except Exception as e:
             logger.error(f"فشل إنشاء حاوية للمستخدم {user_id}: {e}")
             return None
 
-    # ===================== الدالة المعدلة: تعطيل تثبيت الاعتماديات =====================
     def _install_runtime_dependencies(self, user_id: str) -> bool:
-        """
-        الصورة الأساسية تحتوي على كل شيء مسبقاً، لا حاجة للتثبيت.
-        """
+        # في الوضع المباشر لا حاجة
         return True
 
     def run_command_in_container(self, user_id: str, command: str, detach: bool = True,
                                  workdir: str = "/app", environment: Optional[Dict[str, str]] = None) -> Optional[str]:
-        """
-        تنفيذ أمر في الحاوية مع إمكانية تحديد متغيرات البيئة.
-        """
+        if self.direct_mode:
+            # تنفيذ الأمر مباشرة على المضيف (بدون عزل)
+            try:
+                env = os.environ.copy()
+                if environment:
+                    env.update(environment)
+                if detach:
+                    # تشغيل في الخلفية (لا ننتظر النتيجة)
+                    subprocess.Popen(command, shell=True, cwd=workdir, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return "detached"
+                else:
+                    result = subprocess.run(command, shell=True, cwd=workdir, env=env, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"الأمر '{command}' فشل مع كود الخروج {result.returncode}: {result.stderr}")
+                        return None
+                    return result.stdout.strip()
+            except Exception as e:
+                logger.error(f"خطأ في run_command_in_container (direct): {e}")
+                return None
+
         if not self.is_available():
             return None
         container_name = self.get_user_container_name(user_id)
@@ -1437,6 +1443,17 @@ class ContainerManager:
             return None
 
     def copy_file_to_container(self, user_id: str, local_path: str, container_path: str) -> bool:
+        if self.direct_mode:
+            # في الوضع المباشر، ننسخ الملف مباشرة إلى مجلد المستخدم
+            user_dir = self.get_user_dir(user_id)
+            dest_path = os.path.join(user_dir, os.path.basename(container_path))
+            try:
+                shutil.copy2(local_path, dest_path)
+                logger.info(f"تم نسخ الملف {local_path} إلى {dest_path} (direct)")
+                return True
+            except Exception as e:
+                logger.error(f"فشل نسخ الملف في الوضع المباشر: {e}")
+                return False
         if not self.is_available():
             return False
         container_name = self.get_user_container_name(user_id)
@@ -1461,7 +1478,17 @@ class ContainerManager:
             return False
 
     def copy_file_from_container(self, user_id: str, container_path: str, local_path: str) -> bool:
-        """نسخ ملف من الحاوية إلى المضيف."""
+        if self.direct_mode:
+            # في الوضع المباشر، ننسخ من مجلد المستخدم
+            user_dir = self.get_user_dir(user_id)
+            src_path = os.path.join(user_dir, os.path.basename(container_path))
+            try:
+                shutil.copy2(src_path, local_path)
+                logger.info(f"تم نسخ الملف من {src_path} إلى {local_path} (direct)")
+                return True
+            except Exception as e:
+                logger.error(f"فشل نسخ الملف من الوضع المباشر: {e}")
+                return False
         if not self.is_available():
             return False
         container_name = self.get_user_container_name(user_id)
@@ -1486,17 +1513,48 @@ class ContainerManager:
             return False
 
     def install_imported_requirements(self, user_id: str, file_path: str) -> bool:
+        if self.direct_mode:
+            # في الوضع المباشر، نحاول تثبيت المكتبات على المضيف
+            try:
+                imports = get_imports(file_path)
+                for pkg in imports:
+                    if pkg not in BUILTIN_MODULES:
+                        subprocess.run(f"pip install {pkg}", shell=True, check=False)
+                return True
+            except Exception as e:
+                logger.error(f"فشل تثبيت المتطلبات في الوضع المباشر: {e}")
+                return False
         if not self.is_available():
             return False
         return install_imported_requirements(self, user_id, file_path)
 
     def install_requirements_in_container(self, user_id: str, file_path: str) -> bool:
+        if self.direct_mode:
+            # في الوضع المباشر، نحاول تثبيت المتطلبات على المضيف
+            try:
+                base_dir = os.path.dirname(file_path)
+                req_file = os.path.join(base_dir, "requirements.txt")
+                if os.path.exists(req_file):
+                    subprocess.run(f"pip install -r {req_file}", shell=True, check=False)
+                return True
+            except Exception as e:
+                logger.error(f"فشل تثبيت المتطلبات في الوضع المباشر: {e}")
+                return False
         if not self.is_available():
             return False
         return install_requirements_in_container(self, user_id, file_path)
 
     def install_node_dependencies(self, user_id: str, file_path: str) -> bool:
-        """تثبيت اعتماديات Node.js من package.json داخل الحاوية."""
+        if self.direct_mode:
+            try:
+                base_dir = os.path.dirname(file_path)
+                pkg_file = os.path.join(base_dir, "package.json")
+                if os.path.exists(pkg_file):
+                    subprocess.run("npm install", shell=True, cwd=base_dir, check=False)
+                return True
+            except Exception as e:
+                logger.error(f"فشل تثبيت Node dependencies في الوضع المباشر: {e}")
+                return False
         if not self.is_available():
             return False
         base_dir = os.path.dirname(file_path)
@@ -1519,7 +1577,16 @@ class ContainerManager:
             return False
 
     def install_php_dependencies(self, user_id: str, file_path: str) -> bool:
-        """تثبيت اعتماديات PHP من composer.json داخل الحاوية."""
+        if self.direct_mode:
+            try:
+                base_dir = os.path.dirname(file_path)
+                composer_file = os.path.join(base_dir, "composer.json")
+                if os.path.exists(composer_file):
+                    subprocess.run("composer install", shell=True, cwd=base_dir, check=False)
+                return True
+            except Exception as e:
+                logger.error(f"فشل تثبيت PHP dependencies في الوضع المباشر: {e}")
+                return False
         if not self.is_available():
             return False
         base_dir = os.path.dirname(file_path)
@@ -1542,9 +1609,37 @@ class ContainerManager:
             return False
 
     def start_process_and_get_pid(self, user_id: str, base_cmd: str, fid: str, workdir: str = "/app") -> Tuple[Optional[int], Optional[str]]:
-        """
-        تشغيل عملية في الحاوية والحصول على PID ومحتوى السجل الأولي.
-        """
+        if self.direct_mode:
+            # تشغيل العملية مباشرة على المضيف (بدون عزل)
+            user_dir = self.get_user_dir(user_id)
+            log_path = os.path.join(user_dir, "logs", f"{fid}.log")
+            pid_path = os.path.join(user_dir, "logs", f"{fid}.pid")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            try:
+                with open(log_path, "w") as log_f:
+                    proc = subprocess.Popen(
+                        base_cmd,
+                        shell=True,
+                        cwd=workdir,
+                        stdout=log_f,
+                        stderr=subprocess.STDOUT,
+                        text=True
+                    )
+                pid = proc.pid
+                with open(pid_path, "w") as f:
+                    f.write(str(pid))
+                time.sleep(1)
+                # قراءة أول 500 حرف من السجل
+                if os.path.exists(log_path):
+                    with open(log_path, "r") as f:
+                        log_content = f.read(500)
+                else:
+                    log_content = ""
+                return pid, log_content
+            except Exception as e:
+                logger.error(f"خطأ في start_process_and_get_pid (direct): {e}")
+                return None, None
+
         if not self.is_available():
             return None, None
         container_name = self.get_user_container_name(user_id)
@@ -1607,6 +1702,13 @@ class ContainerManager:
             return None, None
 
     def is_process_running(self, user_id: str, pid: int) -> bool:
+        if self.direct_mode:
+            try:
+                # استخدام kill -0 للتحقق
+                subprocess.check_call(["kill", "-0", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except:
+                return False
         if not self.is_available() or not pid:
             return False
         container_name = self.get_user_container_name(user_id)
@@ -1619,6 +1721,12 @@ class ContainerManager:
             return False
 
     def kill_process(self, user_id: str, pid: int) -> bool:
+        if self.direct_mode:
+            try:
+                subprocess.check_call(["kill", "-9", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except:
+                return False
         if not self.is_available() or not pid:
             return False
         cmd = f"kill -9 {pid}"
@@ -1626,10 +1734,12 @@ class ContainerManager:
         return result is not None
 
     def get_log_path(self, user_id: str, file_id: str) -> str:
-        return os.path.join(self.get_user_dir(user_id), "logs", f"{file_id}.log")
+        if self.direct_mode:
+            return os.path.join(self.get_user_dir(user_id), "logs", f"{file_id}.log")
+        return os.path.join(self.get_user_dir(user_id), "logs", f"{file_id}.log")  # نفس المسار
 
     def cleanup_stopped_containers(self):
-        if not self.is_available():
+        if self.direct_mode or not self.is_available():
             return
         try:
             containers = self.docker_client.containers.list(all=True, filters={"status": "exited"})
@@ -1643,7 +1753,7 @@ class ContainerManager:
             logger.error(f"خطأ في تنظيف الحاويات المتوقفة: {e}")
 
     def cleanup_unused_images(self):
-        if not self.is_available():
+        if self.direct_mode or not self.is_available():
             return
         try:
             self.docker_client.images.prune()
@@ -1778,9 +1888,10 @@ def start_hosted_bot(fid):
         save_db()
         return
 
+    # في الوضع المباشر أو عبر Docker، نقوم بتجهيز البيئة
     container_name = container_manager.ensure_container(user_id)
     if not container_name:
-        logger.error(f"فشل إنشاء حاوية للمستخدم {user_id}")
+        logger.error(f"فشل إنشاء حاوية أو تجهيز الوضع المباشر للمستخدم {user_id}")
         f["status"] = "stopped"
         save_db()
         return
@@ -1856,12 +1967,23 @@ def start_hosted_bot(fid):
 
     # معالجة الملفات العادية (py, js, php)
     container_filename = f"{fid}_{f['filename']}"
-    container_path = f"/app/files/{container_filename}"
-    if not container_manager.copy_file_to_container(user_id, temp_path, container_path):
-        logger.error(f"فشل نسخ الملف إلى حاوية المستخدم {user_id}")
-        f["status"] = "stopped"
-        save_db()
-        return
+    # في الوضع المباشر، container_path سيكون مسار الملف داخل مجلد المستخدم
+    if container_manager.direct_mode:
+        user_dir = container_manager.get_user_dir(user_id)
+        container_path = os.path.join(user_dir, "files", container_filename)
+        # نسخ الملف إلى مجلد المستخدم
+        if not container_manager.copy_file_to_container(user_id, temp_path, container_filename):
+            logger.error(f"فشل نسخ الملف إلى مجلد المستخدم {user_id}")
+            f["status"] = "stopped"
+            save_db()
+            return
+    else:
+        container_path = f"/app/files/{container_filename}"
+        if not container_manager.copy_file_to_container(user_id, temp_path, container_path):
+            logger.error(f"فشل نسخ الملف إلى حاوية المستخدم {user_id}")
+            f["status"] = "stopped"
+            save_db()
+            return
 
     # تثبيت الاعتماديات حسب نوع الملف
     deps_success = True
@@ -1913,7 +2035,8 @@ def start_hosted_bot(fid):
         return
 
     # تشغيل العملية
-    pid, log_content = container_manager.start_process_and_get_pid(user_id, base_cmd, fid, workdir="/app")
+    workdir = "/app" if not container_manager.direct_mode else container_manager.get_user_dir(user_id)
+    pid, log_content = container_manager.start_process_and_get_pid(user_id, base_cmd, fid, workdir=workdir)
     if pid is None:
         logger.warning(f"لم يتم الحصول على PID للبوت {fid}.")
         log_file = container_manager.get_log_path(user_id, fid)
@@ -1956,7 +2079,7 @@ def start_hosted_bot(fid):
         return
 
     running_processes[fid] = {
-        "container_name": container_name,
+        "container_name": container_name if not container_manager.direct_mode else "direct",
         "pid": pid,
         "log_path": container_manager.get_log_path(user_id, fid),
         "file_path": container_path,
@@ -1969,7 +2092,7 @@ def start_hosted_bot(fid):
     f["last_bill"] = now_iso()
     f["last_started"] = now_iso()
     save_db()
-    logger.info(f"تم تشغيل البوت {fid} في حاوية {container_name} (PID: {pid}, النوع: {file_ext})")
+    logger.info(f"تم تشغيل البوت {fid} في {'الوضع المباشر' if container_manager.direct_mode else 'الحاوية'} (PID: {pid}, النوع: {file_ext})")
 
 def stop_hosted_bot(fid):
     f = db["files"].get(fid)
@@ -1981,7 +2104,7 @@ def stop_hosted_bot(fid):
             user_id = f["owner"] if f else None
             if user_id:
                 container_manager.kill_process(user_id, pid)
-                logger.info(f"تم إيقاف البوت {fid} (PID: {pid}) في الحاوية {container_name}")
+                logger.info(f"تم إيقاف البوت {fid} (PID: {pid}) في {'الوضع المباشر' if container_name == 'direct' else 'الحاوية'}")
             else:
                 if f:
                     user_id = f["owner"]
