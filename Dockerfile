@@ -58,4 +58,4 @@ ENV PYTHONUSERBASE=/app/.local \
 
 WORKDIR /app
 
-CMD ["python", "main1.py"]
+CMD ["python", "main.py"]
