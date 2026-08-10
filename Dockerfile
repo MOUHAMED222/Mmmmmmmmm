@@ -1,6 +1,6 @@
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim
 
-# تثبيت الأدوات الأساسية
+# تثبيت الأدوات الأساسية و Node.js و PHP
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
@@ -15,7 +15,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# تثبيت PHP (الإصدار الافتراضي) والملحقات المطلوبة
+# تثبيت PHP والملحقات المطلوبة
 RUN apt-get update && apt-get install -y --no-install-recommends \
     php \
     php-mbstring \
@@ -28,32 +28,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && php -r "unlink('composer-setup.php');" \
     && rm -rf /var/lib/apt/lists/*
 
-# تعيين مسار تثبيت حزم Python محليًا
-ENV PYTHONUSERBASE=/app/.local \
-    PATH=/app/.local/bin:$PATH
+# تعيين دليل العمل
+WORKDIR /app
 
-# نسخ ملف المتطلبات وتثبيتها
-COPY requirements*.txt ./
-RUN pip install --upgrade pip setuptools wheel \
-    && pip install --user --no-cache-dir -r requirements*.txt \
-    && pip install --user docker
+# نسخ ملف المتطلبات (تأكد من تسميته requirements.txt)
+COPY requirements.txt ./
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install docker
 
 # نسخ باقي المشروع
 COPY . .
 
-# صورة نهائية أصغر
-FROM python:3.12-slim
+# التحقق من وجود الملفات (للتأكد أثناء البناء)
+RUN ls -la /app
 
-# نسخ التثبيتات من المرحلة السابقة
-COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /usr /usr
-COPY --from=builder /app /app
-# نسخ حزم Python المثبتة محليًا (تم وضعها في /app/.local)
-COPY --from=builder /app/.local /app/.local
-
-ENV PYTHONUSERBASE=/app/.local \
-    PATH=/app/.local/bin:/usr/local/bin:/usr/bin:/bin
-
-WORKDIR /app
-
-CMD ["python", "main.py"]
+# تشغيل البوت مع تفريغ المخرجات فوراً
+CMD ["python", "-u", "main.py"]
